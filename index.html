@@ -82,6 +82,8 @@
       cursor: pointer;
       transition: transform 0.15s, box-shadow 0.15s;
       letter-spacing: 0.03em;
+      position: relative;
+      z-index: 10;
     }
 
     .btn-yes:hover {
@@ -89,7 +91,15 @@
       box-shadow: 0 0 32px rgba(139,92,246,0.5);
     }
 
-    .btn-no {
+    /* placeholder keeps the card layout stable after No goes fixed */
+    #noPlaceholder {
+      display: inline-block;
+      width: 90px;
+      height: 45px;
+      flex-shrink: 0;
+    }
+
+    #noBtn {
       font-family: 'Inter', sans-serif;
       font-size: 15px;
       font-weight: 400;
@@ -101,12 +111,11 @@
       cursor: pointer;
       letter-spacing: 0.03em;
       white-space: nowrap;
-      transition: top 0.12s cubic-bezier(0.22,1,0.36,1), left 0.12s cubic-bezier(0.22,1,0.36,1), font-size 0.2s ease;
-    }
-
-    .btn-no.escaped {
       position: fixed;
       z-index: 9999;
+      /* smooth glide */
+      transition: left 0.13s cubic-bezier(0.22,1,0.36,1),
+                  top  0.13s cubic-bezier(0.22,1,0.36,1);
     }
 
     .success-view {
@@ -174,7 +183,7 @@
     <p class="sub">think carefully. ✨</p>
     <div class="btn-group">
       <button class="btn-yes" id="yesBtn">Yes, obviously</button>
-      <button class="btn-no" id="noBtn">No</button>
+      <div id="noPlaceholder"></div>
     </div>
   </div>
   <div class="success-view" id="successView">
@@ -184,17 +193,20 @@
   </div>
 </div>
 
+<!-- No button lives outside the card so fixed positioning is clean -->
+<button id="noBtn">No</button>
+
 <script>
-  /* Starfield */
+  /* ── Starfield ── */
   const canvas = document.getElementById('stars');
-  const ctx = canvas.getContext('2d');
+  const ctx    = canvas.getContext('2d');
 
   function resizeCanvas() {
     canvas.width  = window.innerWidth;
     canvas.height = window.innerHeight;
   }
   resizeCanvas();
-  window.addEventListener('resize', resizeCanvas);
+  window.addEventListener('resize', () => { resizeCanvas(); snapNoToPlaceholder(); });
 
   const dots = Array.from({ length: 100 }, () => ({
     x:     Math.random() * window.innerWidth,
@@ -217,46 +229,54 @@
   }
   requestAnimationFrame(animateStars);
 
-  /* No button */
-  const noBtn  = document.getElementById('noBtn');
-  const yesBtn = document.getElementById('yesBtn');
-  let escaped       = false;
-  let noHoverCount  = 0;
-  let noBtnFontSize = 15;
-  let curX = 0, curY = 0; // track current fixed position
+  /* ── No button ── */
+  const noBtn      = document.getElementById('noBtn');
+  const yesBtn     = document.getElementById('yesBtn');
+  const placeholder = document.getElementById('noPlaceholder');
 
-  function escapeNoBtn() {
-    noHoverCount++;
-    noBtnFontSize = Math.max(10, 15 - noHoverCount * 0.5);
-    noBtn.style.fontSize = noBtnFontSize + 'px';
+  let hasEscaped   = false;
+  let noHoverCount = 0;
+  let curX = 0, curY = 0;
 
-    const btnW = noBtn.offsetWidth;
-    const btnH = noBtn.offsetHeight;
-    const pad  = 16;
+  // Align No button over the placeholder on load
+  function snapNoToPlaceholder() {
+    if (hasEscaped) return;
+    const r = placeholder.getBoundingClientRect();
+    noBtn.style.left = r.left + 'px';
+    noBtn.style.top  = r.top  + 'px';
+    curX = r.left;
+    curY = r.top;
+  }
 
-    if (!escaped) {
-      // First escape: grab current screen position, switch to fixed there, then jump
-      escaped = true;
-      const r = noBtn.getBoundingClientRect();
-      curX = r.left;
-      curY = r.top;
-      noBtn.classList.add('escaped');
-      noBtn.style.left = curX + 'px';
-      noBtn.style.top  = curY + 'px';
-    }
+  // Wait for fonts/layout then snap
+  window.addEventListener('load', snapNoToPlaceholder);
+  setTimeout(snapNoToPlaceholder, 80);
 
-    // Jump to a new spot that is guaranteed fully on screen
-    // Try up to 10 candidates, pick one far enough from current pos
-    const minDist = 120;
-    let nx, ny, attempts = 0;
+  function safeMove() {
+    // Button dimensions (read fresh each time)
+    const btnW = noBtn.offsetWidth  || 90;
+    const btnH = noBtn.offsetHeight || 45;
+    const pad  = 24; // never closer than 24px to any edge
+
+    const maxX = window.innerWidth  - btnW - pad;
+    const maxY = window.innerHeight - btnH - pad;
+
+    // Pick a new position that is meaningfully different but not too far
+    const jumpRange = 220; // max pixels to jump per escape
+    const minDist   = 80;  // must move at least this far
+
+    let nx, ny, dist, tries = 0;
     do {
-      nx = pad + Math.random() * (window.innerWidth  - btnW - pad * 2);
-      ny = pad + Math.random() * (window.innerHeight - btnH - pad * 2);
-      attempts++;
-    } while (
-      attempts < 10 &&
-      Math.hypot(nx - curX, ny - curY) < minDist
-    );
+      const angle = Math.random() * Math.PI * 2;
+      const dist2 = minDist + Math.random() * (jumpRange - minDist);
+      nx = curX + Math.cos(angle) * dist2;
+      ny = curY + Math.sin(angle) * dist2;
+      // clamp strictly inside safe zone
+      nx = Math.max(pad, Math.min(maxX, nx));
+      ny = Math.max(pad, Math.min(maxY, ny));
+      dist = Math.hypot(nx - curX, ny - curY);
+      tries++;
+    } while (dist < minDist && tries < 15);
 
     curX = nx;
     curY = ny;
@@ -264,20 +284,39 @@
     noBtn.style.top  = ny + 'px';
   }
 
+  function escapeNoBtn() {
+    if (!hasEscaped) {
+      hasEscaped = true;
+      // Disable the glide transition for the very first jump so it feels instant
+      noBtn.style.transition = 'none';
+      snapNoToPlaceholder(); // lock current position before switching
+      requestAnimationFrame(() => {
+        // Re-enable smooth glide for all subsequent hops
+        noBtn.style.transition = 'left 0.13s cubic-bezier(0.22,1,0.36,1), top 0.13s cubic-bezier(0.22,1,0.36,1)';
+        safeMove();
+      });
+    } else {
+      safeMove();
+    }
+
+    noHoverCount++;
+  }
+
   noBtn.addEventListener('mouseover',  escapeNoBtn);
   noBtn.addEventListener('touchstart', (e) => { e.preventDefault(); escapeNoBtn(); }, { passive: false });
 
-  /* Confetti */
+  /* ── Confetti ── */
   function spawnConfetti() {
     const colors = ['#c9a7f0','#8b5cf6','#f0c9e8','#ffffff','#d4b8ff','#e8d5ff'];
     for (let i = 0; i < 50; i++) {
       const dot = document.createElement('div');
-      dot.className = 'confetti-dot';
+      dot.className               = 'confetti-dot';
       dot.style.left              = (10 + Math.random() * 80) + 'vw';
       dot.style.top               = '-12px';
       dot.style.background        = colors[Math.floor(Math.random() * colors.length)];
-      dot.style.width             = (4 + Math.random() * 5) + 'px';
-      dot.style.height            = dot.style.width;
+      const size                  = (4 + Math.random() * 5) + 'px';
+      dot.style.width             = size;
+      dot.style.height            = size;
       dot.style.animationDuration = (0.9 + Math.random() * 1.5) + 's';
       dot.style.animationDelay    = (Math.random() * 0.6) + 's';
       document.body.appendChild(dot);
@@ -285,11 +324,10 @@
     }
   }
 
-  /* Yes button */
+  /* ── Yes button ── */
   yesBtn.addEventListener('click', () => {
     document.getElementById('questionView').style.display = 'none';
-    const sv = document.getElementById('successView');
-    sv.style.display = 'flex';
+    document.getElementById('successView').style.display  = 'flex';
     noBtn.style.display = 'none';
     spawnConfetti();
     setTimeout(spawnConfetti, 500);
